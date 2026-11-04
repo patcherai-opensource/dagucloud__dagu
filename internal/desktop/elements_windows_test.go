@@ -6,6 +6,7 @@
 package desktop
 
 import (
+	"os"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -90,6 +91,37 @@ func TestPatternAsWithoutPattern(t *testing.T) {
 func fakeElement(hr hresult) *element {
 	vtbl := new([128]uintptr)
 	vtbl[uiaGetCurrentPatternAs] = syscall.NewCallback(func(_, _, _, _ uintptr) uintptr { return uintptr(hr) })
+	return (*element)(&comObject{vtbl: vtbl})
+}
+
+// A call Windows denies on an element of an application above this process
+// fails as input to it does, naming the application; a denial at this
+// process's level and any other failure stay as they were.
+func TestDeniedAsElevated(t *testing.T) {
+	t.Parallel()
+
+	pid := uint32(os.Getpid()) //nolint:gosec // a process id fits a DWORD
+	el := processElement(pid)
+	above := fakeLevels{self: mediumLevel, procs: map[uint32]integrityLevel{pid: highLevel}}
+	same := fakeLevels{self: mediumLevel, procs: map[uint32]integrityLevel{pid: mediumLevel}}
+	denied := check("Invoke", hrAccessDenied)
+
+	err := deniedAsElevated(above, el, denied)
+	assert.ErrorIs(t, err, ErrRefused)
+	assert.Contains(t, err.Error(), "runs elevated, at a higher integrity level than this process")
+	assert.Equal(t, denied, deniedAsElevated(same, el, denied))
+	failed := check("Invoke", 0x80004005)
+	assert.Equal(t, failed, deniedAsElevated(above, el, failed))
+	assert.NoError(t, deniedAsElevated(above, el, nil))
+}
+
+// processElement is an element whose get_CurrentProcessId answers pid.
+func processElement(pid uint32) *element {
+	vtbl := new([128]uintptr)
+	vtbl[uiaGetCurrentProcessID] = syscall.NewCallback(func(_ uintptr, out *uint32) uintptr {
+		*out = pid
+		return 0
+	})
 	return (*element)(&comObject{vtbl: vtbl})
 }
 

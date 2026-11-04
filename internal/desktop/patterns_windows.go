@@ -43,6 +43,7 @@ var (
 // IUIAutomation2, which extends IUIAutomation (last index 57).
 const (
 	uiaGetCurrentPatternAs    = 14
+	uiaGetCurrentProcessID    = 20
 	uiaGetCurrentIsEnabled    = 28
 	uia2PutTransactionTimeout = 63
 )
@@ -69,6 +70,7 @@ const (
 // Results a pattern call answers with.
 const (
 	hrNoInterface         hresult = 0x80004002
+	hrAccessDenied        hresult = 0x80070005
 	hrElementNotEnabled   hresult = 0x80040200
 	hrElementNotAvailable hresult = 0x80040201
 	hrNotSupported        hresult = 0x80040204
@@ -106,6 +108,32 @@ func (e *element) patternAs(id int32, iid *windows.GUID) (*comObject, error) {
 
 func (e *element) currentIsEnabled() (bool, error) {
 	return e.cachedBool("get_CurrentIsEnabled", uiaGetCurrentIsEnabled)
+}
+
+// currentProcessID is the process that owns the element.
+func (e *element) currentProcessID() (uint32, error) {
+	var pid uint32
+	if err := check("get_CurrentProcessId", e.com().call(uiaGetCurrentProcessID, out(&pid))); err != nil {
+		return 0, err
+	}
+	return pid, nil
+}
+
+// deniedAsElevated returns the error naming el's application when Windows
+// denied a call on el because the application runs at a higher integrity
+// level than this process, and err as it is otherwise.
+func deniedAsElevated(levels integrityLevels, el *element, err error) error {
+	if !errors.Is(err, hrAccessDenied) {
+		return err
+	}
+	pid, pidErr := el.currentProcessID()
+	if pidErr != nil {
+		return err
+	}
+	if refused := admitProcess(levels, pid, processApp(pid)); refused != nil {
+		return refused
+	}
+	return err
 }
 
 // invoke presses a button, menu item, or link.

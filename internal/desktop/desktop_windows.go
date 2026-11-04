@@ -409,7 +409,9 @@ func (windowsBackend) Position() (int, int, error) {
 	return int(p.X), int(p.Y), nil
 }
 
-func (windowsBackend) Button(button Button, down bool, _ int) error {
+// Button refuses a press over a window Windows would drop it at, but never
+// a release, so a button already down always comes up.
+func (b windowsBackend) Button(button Button, down bool, _ int) error {
 	var flags uint32
 	switch button {
 	case ButtonLeft:
@@ -421,11 +423,29 @@ func (windowsBackend) Button(button Button, down bool, _ int) error {
 	default:
 		return fmt.Errorf("unknown mouse button %q", button)
 	}
+	if down {
+		if err := admitInput(systemLevels, b.underPointer()); err != nil {
+			return err
+		}
+	}
 	return sendInput(mouseEvent(flags, 0))
 }
 
-func (windowsBackend) Wheel(dx, dy int) error {
+func (b windowsBackend) Wheel(dx, dy int) error {
+	if err := admitInput(systemLevels, b.underPointer()); err != nil {
+		return err
+	}
 	return sendInput(wheelInputs(dx, dy)...)
+}
+
+// underPointer is the window pointer input reaches, or a zero WindowID when
+// the pointer's position cannot be read.
+func (b windowsBackend) underPointer() WindowID {
+	x, y, err := b.Position()
+	if err != nil {
+		return WindowID{}
+	}
+	return b.WindowAt(x, y)
 }
 
 // wheelInputs sends a notch per event, as a mouse wheel does, since some
@@ -446,7 +466,14 @@ func wheelData(notches int) uint32 {
 	return uint32(int32(notches * wheelDelta)) //nolint:gosec // two's complement is what Windows expects
 }
 
-func (windowsBackend) Key(key Key, down bool) error {
+// Key refuses a press when the focused window would drop it, but never a
+// release, so a key already down always comes up.
+func (b windowsBackend) Key(key Key, down bool) error {
+	if down {
+		if err := admitInput(systemLevels, b.FocusedWindow()); err != nil {
+			return err
+		}
+	}
 	flags := pick[uint32](down, 0, keyUp)
 	if named, ok := namedKeys[key]; ok {
 		if named.extended {
@@ -484,7 +511,10 @@ func scanCode(vk uint16) uint16 {
 	return uint16(scan) //nolint:gosec // scan codes fit a WORD
 }
 
-func (windowsBackend) Type(text string) error {
+func (b windowsBackend) Type(text string) error {
+	if err := admitInput(systemLevels, b.FocusedWindow()); err != nil {
+		return err
+	}
 	units := utf16.Encode([]rune(text))
 	events := make([]input, 0, len(units)*2)
 	for _, unit := range units {
@@ -509,15 +539,17 @@ func (b windowsBackend) Close() error {
 	return nil
 }
 
-// sendInput injects events. Windows drops input silently to windows of a
-// higher integrity level, so a partial count is reported as an error.
+// sendInput injects events. SendInput counts events dropped at a window of
+// a higher integrity level as sent, so callers check the window first; a
+// short count means the input stream itself refused them, as while the
+// screen is locked or a secure prompt has the desktop.
 func sendInput(events ...input) error {
 	if len(events) == 0 {
 		return nil
 	}
 	sent, _, err := procSendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), unsafe.Sizeof(events[0])) //nolint:gosec // Win32 takes the INPUT array address as uintptr
 	if int(sent) != len(events) {
-		return fmt.Errorf("SendInput delivered %d of %d events; the target may run elevated or the desktop is locked: %w", sent, len(events), err)
+		return fmt.Errorf("SendInput delivered %d of %d events; the screen may be locked or a secure prompt shown: %w", sent, len(events), err)
 	}
 	return nil
 }

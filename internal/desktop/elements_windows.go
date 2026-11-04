@@ -279,7 +279,7 @@ func (e *uiaElements) Focus(target Element) error {
 			return err
 		}
 		defer el.release()
-		return el.setFocus()
+		return deniedAsElevated(systemLevels, el, el.setFocus())
 	})
 }
 
@@ -310,7 +310,7 @@ func (e *uiaElements) Apply(target Element, pattern Pattern, value string) error
 		case errors.Is(err, hrElementNotAvailable):
 			return fmt.Errorf("%w: the element went away", ErrNotFound)
 		}
-		return err
+		return deniedAsElevated(systemLevels, el, err)
 	})
 }
 
@@ -908,6 +908,12 @@ func appName(hwnd windows.HWND) string {
 	if _, err := windows.GetWindowThreadProcessId(hwnd, &pid); err != nil || pid == 0 {
 		return ""
 	}
+	return processApp(pid)
+}
+
+// processApp returns the image name of a process without its extension, or
+// "" when it cannot be read.
+func processApp(pid uint32) string {
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
 		return ""
