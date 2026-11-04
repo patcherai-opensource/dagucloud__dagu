@@ -85,26 +85,20 @@ func errElevated(app string) error {
 	return refusal(fmt.Sprintf("%q runs elevated, at a higher integrity level than this process, so Windows blocks input to it; run %q without administrator rights, or run Dagu at the same level", app, app))
 }
 
-// admitProcess returns the error naming app when process pid runs at a
-// higher integrity level than this process. It returns nil when either
-// level is unknown, so input is then sent as it always was.
-func admitProcess(levels integrityLevels, pid uint32, app string) error {
-	own, ok := levels.own()
-	if !ok {
-		return nil
-	}
-	if level, ok := levels.of(pid); ok && level > own {
-		return errElevated(app)
-	}
-	return nil
-}
-
-// admitInput returns the error naming w's application when Windows would
-// drop input sent to w, and nil for a window it delivers to or one the
-// system does not name.
+// admitInput returns the error naming w's application when w's process
+// runs at a higher integrity level than this process, so Windows would drop
+// input sent to w. It returns nil for a window the system does not name or
+// whose level is unknown, so input is then sent as it always was.
 func admitInput(levels integrityLevels, w WindowID) error {
 	if !w.Known() {
 		return nil
 	}
-	return admitProcess(levels, w.PID, cmp.Or(w.App, w.Title))
+	own, ok := levels.own()
+	if !ok {
+		return nil
+	}
+	if level, ok := levels.of(w.PID); ok && level > own {
+		return errElevated(cmp.Or(w.App, w.Title))
+	}
+	return nil
 }
