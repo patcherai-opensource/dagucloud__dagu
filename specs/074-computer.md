@@ -205,6 +205,16 @@ service manager, rather than that application, starts Dagu, as on macOS;
 the second protects that application's pages in a browser a person also
 uses, where a click could start the automation again.
 
+On Windows, a step cannot operate an application whose process runs at a
+higher integrity level than Dagu, such as one run as administrator when Dagu
+is not: Windows drops the input yet reports it sent. A click or scroll over
+one of its windows, a drag that starts on one, keys or typing while one has
+the focus, and direct input on one of its elements fail before anything is
+sent, with a result that names the application and says it runs elevated,
+and the model is told.
+The screen and the window still read. Running the application without
+administrator rights, or Dagu at the same level, lets the step operate it.
+
 ### Window size
 
 Unless `with.maximize` is `false`, a step maximizes the window in front
