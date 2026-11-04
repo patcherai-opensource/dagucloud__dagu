@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -408,6 +409,8 @@ func median(n int, fn func()) time.Duration {
 // medium integrity, the elements of the window above it.
 const belowEnv = "DAGU_DESKTOP_E2E_BELOW"
 
+var procCreateRestrictedToken = windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateRestrictedToken")
+
 // elevatedTargets are the elements the medium-integrity copy acts on.
 type elevatedTargets struct {
 	Save   Element
@@ -448,9 +451,9 @@ func TestWindowsElevatedWindow(t *testing.T) {
 	require.NoError(t, err)
 	below := exec.Command(os.Args[0], "-test.run=^TestWindowsElevatedWindow$", "-test.count=1", "-test.v") //nolint:gosec // the test binary runs itself
 	below.Env = append(os.Environ(), belowEnv+"="+string(targets))
-	out, err := below.CombinedOutput()
+	below.SysProcAttr = &syscall.SysProcAttr{Token: syscall.Token(mediumToken(t))}
+	out, belowErr := below.CombinedOutput()
 	t.Logf("medium-integrity copy:\n%s", out)
-	require.NoError(t, err)
 
 	// Nothing the copy did reached the window.
 	status := centre(byID["statusLabel"].Bounds)
@@ -461,30 +464,34 @@ func TestWindowsElevatedWindow(t *testing.T) {
 	amount, err := els.At(field.X, field.Y)
 	require.NoError(t, err)
 	assert.Empty(t, amount.Value)
+	require.NoError(t, belowErr)
 }
 
-// operateFromBelow drops this process to medium integrity and operates the
-// window the test started above it.
+// operateFromBelow operates, from medium integrity, the window the test
+// started above it.
 func operateFromBelow(t *testing.T, encoded string) {
 	var targets elevatedTargets
 	require.NoError(t, json.Unmarshal([]byte(encoded), &targets))
-	lowerToMedium(t)
+	own, ok := systemLevels.own()
+	require.True(t, ok)
+	require.Equal(t, mediumLevel, own, "the copy runs at medium integrity")
 	driver := e2eDesktop(t)
 	els := e2eElements(t)
 	ctx := t.Context()
 
 	_, err := driver.Screenshot()
-	require.NoError(t, err, "the screen reads across the boundary")
+	assert.NoError(t, err, "the screen reads across the boundary")
 	front, err := els.FrontWindow()
-	require.NoError(t, err, "the window reads across the boundary")
+	assert.NoError(t, err, "the window reads across the boundary")
 	assert.Equal(t, elementsWindowTitle, front.Name)
 
 	elevated := func(what string, err error) {
 		t.Helper()
 		t.Logf("%s: %v", what, err)
-		require.Error(t, err, what)
-		assert.ErrorIs(t, err, ErrRefused, what)
-		assert.Contains(t, err.Error(), `"powershell" runs elevated`, what)
+		if assert.Error(t, err, what) {
+			assert.ErrorIs(t, err, ErrRefused, what)
+			assert.Contains(t, err.Error(), `"powershell" runs elevated`, what)
+		}
 	}
 	elevated("click", driver.Click(ctx, nil, ButtonLeft, 1, nil))
 	elevated("scroll", driver.Scroll(ctx, nil, 0, 1, nil))
@@ -494,18 +501,23 @@ func operateFromBelow(t *testing.T, encoded string) {
 	elevated("set value", els.Apply(targets.Amount, PatternSetValue, "1200"))
 }
 
-// lowerToMedium drops this process to medium integrity, the level of a
-// process a user starts without administrator rights.
-func lowerToMedium(t *testing.T) {
+// mediumToken returns a primary token of this process's user at medium
+// integrity, the level of a process started without administrator rights.
+// It is a restricted copy of this process's own token, which a process may
+// start another with and no privilege.
+func mediumToken(t *testing.T) windows.Token {
 	t.Helper()
+	var own windows.Token
+	require.NoError(t, windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY|windows.TOKEN_ASSIGN_PRIMARY|windows.TOKEN_ADJUST_DEFAULT, &own))
+	defer func() { _ = own.Close() }()
 	var token windows.Token
-	require.NoError(t, windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_DEFAULT|windows.TOKEN_QUERY, &token))
-	defer func() { _ = token.Close() }()
+	if ok, _, err := procCreateRestrictedToken.Call(uintptr(own), 0, 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&token))); ok == 0 { //nolint:gosec // Win32 takes the out-parameter as uintptr
+		require.NoError(t, err, "CreateRestrictedToken")
+	}
+	t.Cleanup(func() { _ = token.Close() })
 	sid, err := windows.CreateWellKnownSid(windows.WinMediumLabelSid)
 	require.NoError(t, err)
 	label := windows.Tokenmandatorylabel{Label: windows.SIDAndAttributes{Sid: sid, Attributes: windows.SE_GROUP_INTEGRITY}}
 	require.NoError(t, windows.SetTokenInformation(token, windows.TokenIntegrityLevel, (*byte)(unsafe.Pointer(&label)), label.Size())) //nolint:gosec // Win32 reads a TOKEN_MANDATORY_LABEL
-	level, ok := tokenLevel(token)
-	require.True(t, ok)
-	require.Equal(t, mediumLevel, level, "the process runs at medium integrity")
+	return token
 }
