@@ -17,8 +17,9 @@ import (
 // integrityLevel is the mandatory integrity level of a process: 0x2000 for
 // one a user starts, 0x3000 for one run as administrator. Windows drops
 // input this process sends to a window of a higher level, though SendInput
-// reports it sent, and refuses the window's element actions; reads of the
-// window and screenshots of it still work.
+// reports it sent, and keeps the window's elements from acting for this
+// process, often hiding them too; the window itself and screenshots of it
+// still read.
 type integrityLevel uint32
 
 // integrityLevels reads integrity levels. ok is false when the system does

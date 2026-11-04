@@ -271,15 +271,19 @@ func (e *uiaElements) Outline(window Element, limit int) ([]Element, error) {
 	})
 }
 
-// Focus finds the element again and gives it the keyboard focus.
+// Focus finds the element again and gives it the keyboard focus. Like
+// Apply, it fails first in a window above this process's integrity level.
 func (e *uiaElements) Focus(target Element) error {
+	if err := admitInput(systemLevels, actionWindow(target)); err != nil {
+		return err
+	}
 	return e.run("focus", func(w *uiaWorker) error {
 		el, err := w.locate(target)
 		if err != nil {
 			return err
 		}
 		defer el.release()
-		return deniedAsElevated(systemLevels, el, el.setFocus())
+		return el.setFocus()
 	})
 }
 
@@ -287,12 +291,18 @@ func (e *uiaElements) Focus(target Element) error {
 // runs on a thread of its own, with an automation client of its own: an
 // application may run the element's handler inside the call, and one that
 // opens a dialog there holds the call until the dialog closes, which must
-// not hold the thread that reads the screen.
+// not hold the thread that reads the screen. In a window above this
+// process's integrity level it fails first with the error input to that
+// window gets: Windows hides such a window's elements from this process or
+// drops what is asked of them.
 func (e *uiaElements) Apply(target Element, pattern Pattern, value string) error {
 	select {
 	case <-e.quit:
 		return errElementsClosed
 	default:
+	}
+	if err := admitInput(systemLevels, actionWindow(target)); err != nil {
+		return err
 	}
 	return actAlone(string(pattern), func(w *uiaWorker) error {
 		el, err := w.locate(target)
@@ -310,7 +320,7 @@ func (e *uiaElements) Apply(target Element, pattern Pattern, value string) error
 		case errors.Is(err, hrElementNotAvailable):
 			return fmt.Errorf("%w: the element went away", ErrNotFound)
 		}
-		return deniedAsElevated(systemLevels, el, err)
+		return err
 	})
 }
 
@@ -382,6 +392,17 @@ func readAlone[T any](ctx context.Context, what string, fn func(*uiaWorker) (T, 
 		var zero T
 		return zero, fmt.Errorf("%s: %w", what, ctx.Err())
 	}
+}
+
+// actionWindow is the window an element action reaches: the one under the
+// element's centre, where locate looks first, or the window in front for an
+// element with no place on the screen.
+func actionWindow(target Element) WindowID {
+	if target.Bounds.Empty() {
+		return windowID(windows.GetForegroundWindow())
+	}
+	at := target.Bounds.Min.Add(target.Bounds.Size().Div(2))
+	return inputWindowAt(at.X, at.Y)
 }
 
 // locate finds an element again, under its centre first and then by its
@@ -908,12 +929,6 @@ func appName(hwnd windows.HWND) string {
 	if _, err := windows.GetWindowThreadProcessId(hwnd, &pid); err != nil || pid == 0 {
 		return ""
 	}
-	return processApp(pid)
-}
-
-// processApp returns the image name of a process without its extension, or
-// "" when it cannot be read.
-func processApp(pid uint32) string {
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
 		return ""
