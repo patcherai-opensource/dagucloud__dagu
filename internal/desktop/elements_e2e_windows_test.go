@@ -499,6 +499,7 @@ func operateFromBelow(t *testing.T, encoded string) {
 	elevated("key", driver.PressKeys(ctx, []Key{KeyEnter}, 1))
 	elevated("invoke", els.Apply(targets.Save, PatternInvoke, ""))
 	elevated("set value", els.Apply(targets.Amount, PatternSetValue, "1200"))
+	elevated("focus", els.Focus(targets.Amount))
 }
 
 // mediumToken returns a primary token of this process's user at medium
