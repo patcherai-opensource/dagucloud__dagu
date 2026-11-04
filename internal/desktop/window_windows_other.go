@@ -15,3 +15,5 @@ func (windowsBackend) Raise(WindowID) error         { return nil }
 func (windowsBackend) Maximize(WindowID) (bool, error) {
 	return false, nil
 }
+
+func inputWindowAt(int, int) WindowID { return WindowID{} }

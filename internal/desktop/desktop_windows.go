@@ -432,10 +432,14 @@ func (b windowsBackend) Button(button Button, down bool, _ int) error {
 }
 
 func (b windowsBackend) Wheel(dx, dy int) error {
+	events := wheelInputs(dx, dy)
+	if len(events) == 0 {
+		return nil
+	}
 	if err := admitInput(systemLevels, b.underPointer()); err != nil {
 		return err
 	}
-	return sendInput(wheelInputs(dx, dy)...)
+	return sendInput(events...)
 }
 
 // underPointer is the window pointer input reaches, or a zero WindowID when
@@ -445,7 +449,7 @@ func (b windowsBackend) underPointer() WindowID {
 	if err != nil {
 		return WindowID{}
 	}
-	return b.WindowAt(x, y)
+	return inputWindowAt(x, y)
 }
 
 // wheelInputs sends a notch per event, as a mouse wheel does, since some
