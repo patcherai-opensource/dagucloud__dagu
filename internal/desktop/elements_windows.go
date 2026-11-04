@@ -272,11 +272,8 @@ func (e *uiaElements) Outline(window Element, limit int) ([]Element, error) {
 }
 
 // Focus finds the element again and gives it the keyboard focus. Like
-// Apply, it fails first in a window above this process's integrity level.
+// Apply, it fails in a window above this process's integrity level.
 func (e *uiaElements) Focus(target Element) error {
-	if err := admitInput(systemLevels, actionWindow(target)); err != nil {
-		return err
-	}
 	return e.run("focus", func(w *uiaWorker) error {
 		el, err := w.locate(target)
 		if err != nil {
@@ -292,17 +289,14 @@ func (e *uiaElements) Focus(target Element) error {
 // application may run the element's handler inside the call, and one that
 // opens a dialog there holds the call until the dialog closes, which must
 // not hold the thread that reads the screen. In a window above this
-// process's integrity level it fails first with the error input to that
-// window gets: Windows hides such a window's elements from this process or
-// drops what is asked of them.
+// process's integrity level it fails, before anything is asked of the
+// element, with the error input to that window gets: Windows hides such a
+// window's elements from this process or drops what is asked of them.
 func (e *uiaElements) Apply(target Element, pattern Pattern, value string) error {
 	select {
 	case <-e.quit:
 		return errElementsClosed
 	default:
-	}
-	if err := admitInput(systemLevels, actionWindow(target)); err != nil {
-		return err
 	}
 	return actAlone(string(pattern), func(w *uiaWorker) error {
 		el, err := w.locate(target)
@@ -394,25 +388,20 @@ func readAlone[T any](ctx context.Context, what string, fn func(*uiaWorker) (T, 
 	}
 }
 
-// actionWindow is the window an element action reaches: the one under the
-// element's centre, where locate looks first, or the window in front for an
-// element with no place on the screen.
-func actionWindow(target Element) WindowID {
-	if target.Bounds.Empty() {
-		return windowID(windows.GetForegroundWindow())
-	}
-	at := target.Bounds.Min.Add(target.Bounds.Size().Div(2))
-	return inputWindowAt(at.X, at.Y)
-}
-
 // locate finds an element again, under its centre first and then by its
 // path in the front window, and returns it live. The caller releases it.
+// The window it is found in must take this process's input; one above this
+// process's integrity level fails with the error input to it gets.
 func (w *uiaWorker) locate(target Element) (*element, error) {
 	if !target.Bounds.Empty() {
 		centre := target.Bounds.Min.Add(target.Bounds.Size().Div(2))
 		if el, err := w.auto.elementFromPoint(centre.X, centre.Y, w.cacheElement); err == nil {
 			found, err := w.convert(el, false)
 			if err == nil && found.Role == target.Role && found.Name == target.Name && found.ID == target.ID {
+				if err := admitInput(systemLevels, inputWindowAt(centre.X, centre.Y)); err != nil {
+					el.release()
+					return nil, err
+				}
 				return el, nil
 			}
 			el.release()
@@ -420,6 +409,11 @@ func (w *uiaWorker) locate(target Element) (*element, error) {
 	}
 	if len(target.Path) == 0 {
 		return nil, fmt.Errorf("%w: the element is not where it was", ErrNotFound)
+	}
+	// A window above this process's level hides its elements, so the window
+	// in front is checked before its tree is read.
+	if err := admitInput(systemLevels, windowID(windows.GetForegroundWindow())); err != nil {
+		return nil, err
 	}
 	top, err := w.frontWindow()
 	if err != nil {
